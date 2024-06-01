@@ -1,15 +1,13 @@
-# Process and Visualize data
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 plt.style.use('fivethirtyeight')
-from scipy import stats, interp
 from sqlalchemy import create_engine
 import seaborn as sns
 import datetime
 
 # Preprocess data
-from sklearn.preprocessing import LabelEncoder, label_binarize, OneHotEncoder, StandardScaler
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler
 
 # Feature selection
 from sklearn.decomposition import PCA
@@ -18,45 +16,20 @@ from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import BaggingClassifier, AdaBoostClassifier, RandomForestClassifier, VotingClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, classification_report, make_scorer, confusion_matrix
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, make_scorer
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import roc_curve, auc
-from sklearn.multiclass import OneVsRestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
 from sklearn.svm import LinearSVC
+import xgboost as xgb
 
 # Read the full contents of the dataframes
-pd.set_option('display.max_colwidth', None)
-pd.options.display.max_columns = None
-
-
-# Define a function to shift columns to the right for rows with null species
-def shift_row(row, avg_sepal_length):
-    """
-    Shifts columns to the right for rows with null sepal_length, replacing
-    the null sepal_length with the mean sepal_length.
-
-    Parameters:
-    - row: pd.Series
-        The row of the DataFrame.
-    - avg_sepal_length: Double
-        The average sepal length of the flower species
-
-    Returns:
-    - pd.Series
-        The shifted row.
-    """
-    if pd.isnull(row['species']):
-        return pd.Series([row['petal_width'], row['petal_length'],
-                          row['sepal_width'], row['sepal_length'],
-                          avg_sepal_length],
-                         index=['species', 'petal_width', 'petal_length',
-                                'sepal_width', 'sepal_length'])
-    return row
-
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.width', 1000)
 
 def convert_columns_to_numeric(df, columns):
     """
@@ -72,7 +45,6 @@ def convert_columns_to_numeric(df, columns):
     for column in columns:
         df[column] = pd.to_numeric(df[column], errors='coerce')
     return df
-
 
 def evaluate_classifiers(X_train, X_test, y_train, y_test):
     """
@@ -120,12 +92,14 @@ def evaluate_classifiers(X_train, X_test, y_train, y_test):
                                                               max_features=1.0, n_estimators=10),
         'Boosting Decision Tree (Ensemble)': AdaBoostClassifier(
             DecisionTreeClassifier(min_samples_split=10, max_depth=4),
-            n_estimators=10, learning_rate=0.6),
+            n_estimators=10, learning_rate=0.6, algorithm='SAMME'),
         'Random Forest (Ensemble)': RandomForestClassifier(n_estimators=30, max_depth=8),
+        'XGBoost': xgb.XGBClassifier(use_label_encoder=False, eval_metric='mlogloss'),
         'Voting Classifier (Ensemble)': VotingClassifier(estimators=[
             ('lr', LogisticRegression(max_iter=1000)),
             ('rf', RandomForestClassifier(n_estimators=30, max_depth=8)),
-            ('svm', LinearSVC(max_iter=10000))
+            ('svm', LinearSVC(max_iter=10000)),
+            ('xgb', xgb.XGBClassifier(use_label_encoder=False, eval_metric='mlogloss'))
         ], voting='hard')
     }
 
@@ -147,10 +121,10 @@ def evaluate_classifiers(X_train, X_test, y_train, y_test):
         ])
 
         # Perform cross-validation
-        scores = cross_val_score(pipeline, X_train, y_train, scoring='accuracy', cv=5, n_jobs=-1)
-        precision = cross_val_score(pipeline, X_train, y_train, scoring=scoring['precision'], cv=5, n_jobs=-1)
-        recall = cross_val_score(pipeline, X_train, y_train, scoring=scoring['recall'], cv=5, n_jobs=-1)
-        f1 = cross_val_score(pipeline, X_train, y_train, scoring=scoring['f1'], cv=5, n_jobs=-1)
+        scores = cross_val_score(pipeline, X_train, y_train, scoring='accuracy', cv=5, n_jobs=1)
+        precision = cross_val_score(pipeline, X_train, y_train, scoring=scoring['precision'], cv=5, n_jobs=1)
+        recall = cross_val_score(pipeline, X_train, y_train, scoring=scoring['recall'], cv=5, n_jobs=1)
+        f1 = cross_val_score(pipeline, X_train, y_train, scoring=scoring['f1'], cv=5, n_jobs=1)
 
         pipeline.fit(X_train, y_train)
         y_pred = pipeline.predict(X_test)
@@ -175,45 +149,88 @@ def evaluate_classifiers(X_train, X_test, y_train, y_test):
 
     return output, predictions
 
+def pca_dimensionality_reduction(iris, X, y):
+    """
+    Perform PCA for dimensionality reduction on the Iris dataset and evaluate classifiers.
+
+    Parameters:
+    - iris: pd.DataFrame
+        DataFrame containing the Iris features and flower species.
+    - X: pd.DataFrame
+        Iris features.
+    - y: pd.Series
+        Iris labels.
+
+    Returns:
+    - output_pca: pd.DataFrame
+        DataFrame containing the performance metrics of each classifier after PCA.
+    - predictions_pca: dict
+        Dictionary containing the predictions of each classifier after PCA.
+    """
+
+    # Apply PCA
+    pca = PCA(n_components=0.95)  # Preserve 95% of the variance
+    pca_features = pca.fit_transform(X)
+
+    print("PCA Components Shape:", pca_features.shape)
+    print("Explained Variance:", pca.explained_variance_)
+    print("Explained Variance Ratio:", pca.explained_variance_ratio_)
+
+    # Split the dataset into training and testing sets
+    X_train_pca, X_test_pca, y_train_pca, y_test_pca = train_test_split(pca_features, y, test_size=0.25, random_state=42)
+
+    # Convert arrays to DataFrames
+    X_train_pca_df = pd.DataFrame(X_train_pca)
+    X_test_pca_df = pd.DataFrame(X_test_pca)
+
+    # Evaluate classifiers on the PCA-transformed data
+    output_pca, predictions_pca = evaluate_classifiers(X_train_pca_df, X_test_pca_df, y_train_pca, y_test_pca)
+
+    return output_pca, predictions_pca
+
 if __name__ == '__main__':
 
-    # Load the IRIS CSV file into a DataFrame
+    # Load the IRIS dataset into a Pandas Dataframe
     url = "https://raw.githubusercontent.com/matthewshawnkehoe/Iris-Classification/main/IRIS.csv"
     iris_df = pd.read_csv(url)
-
-    # Create an SQLite engine
     engine = create_engine('sqlite:///iris.db')
-
-    # Load the DataFrame into the SQLite database
     iris_df.to_sql('iris', engine, index=False, if_exists='replace')
 
-    # Calculate the average sepal length
-    avg_sepal_length = iris_df['sepal_length'].mean()
-
-    # Fix row 22 which has an invalid sepal length
-    iris_df = iris_df.apply(shift_row, axis=1)
-
-    # Specify the features to convert
+    # Convert all feature columns to the numerical type and drop any rows with null values
     features = ['petal_length', 'petal_width', 'sepal_length', 'sepal_width']
-
-    # Convert all feature columns to numeric
     iris_df = convert_columns_to_numeric(iris_df, features)
-
-    # Preprocess data
+    iris_df = iris_df.dropna()
 
     # Encode the species column into numerical values
     le = LabelEncoder()
     iris_df['species'] = le.fit_transform(iris_df['species'].astype(str))
 
-    # Convert the species column to numerical values
-    iris_df['species'] = le.fit_transform(iris_df['species'].astype(str))
-
-    # Model Preparation
-
+    # Prepare the model
     X = iris_df.drop('species', axis=1)
     y = iris_df['species']
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
 
+    # Evaluate the model
+    output, predictions = evaluate_classifiers(X_train, X_test, y_train, y_test)
+    print('Results of ML algorithms without dimensionality reduction: \n')
+    print(output)
+    print('\nThe test accuracy for all of our models is 1 (100%). Therefore, we will need to reduce overfitting in ' \
+          'the test data.\n')
 
+    # Evaluate the model with dimensionality reduction
+    output_pca, predictions_pca = pca_dimensionality_reduction(iris_df, X, y)
+    print('\n')
+    print('Results of ML algorithms after dimensionality reduction: \n')
+    print(output_pca)
 
-    Ellipsis
+    # Evaluate the model with two most important features: pedal width and length
+    X_reduced = iris_df[['petal_length', 'petal_width']]
+    y = iris_df['species']
+    X_train_reduced, X_test_reduced, y_train_reduced, y_test_reduced = train_test_split(X_reduced, y, test_size=0.25,
+                                                                                        random_state=42)
+
+    output_reduced, predictions_reduced = evaluate_classifiers(X_train_reduced, X_test_reduced, y_train_reduced,
+                                                               y_test_reduced)
+    print('\n')
+    print('Results of ML algorithms for two most important features - pedal width and length: \n')
+    print(output_pca)
