@@ -37,3 +37,7 @@ You should now be set up to use code from the Iris classification project in you
 ## Dataset
 
 The data used for this project is the [Iris Flower Clasification Dataset](https://archive.ics.uci.edu/dataset/53/iris).
+
+## Analysis of the IRIS data
+
+Run the attached notebook `IRIS.ipynb` or `main.py` in the `src` directory. The test cases can be viewed through running `py.test -rf` in the base directory.
